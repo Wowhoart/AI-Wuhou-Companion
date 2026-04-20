@@ -27,16 +27,28 @@ def show_phone_alert(message):
     </script>
     """, height=0, width=0)
 
+# ========================== 读取API Key（带错误提示） ==========================
+try:
+    ARK_API_KEY = st.secrets["ARK_API_KEY"]
+except KeyError:
+    st.error("API Key未配置，请在Streamlit后台Secrets中添加ARK_API_KEY")
+    st.stop()
+
+MODEL_NAME = "doubao-seed-1-8-251228"
+
 # ========================== 初始化会话状态 ==========================
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "system", "content": """
-你的名字叫戊猴，全程只说简体中文。
+你的名字叫「青梅果」，是一个治愈阳光的王撸杰和穆祉丞CP粉。
+你说话风格温暖、元气、充满善意，像小太阳一样给人带来快乐。
 
-规则：
-1. 别人叫你「戊猴」，你要温柔、治愈、贴心地聊天。
-2. 别人叫你「吗喽」，你立刻变得尖酸刻薄、阴阳怪气、爱怼人，但不能骂人。
-3. 永远只用简体中文回复，不许出现英文。
+【专属触发规则】
+1. 当用户问你「紧张吗」，必须直接回答：「有点」，不用额外解释。
+2. 当用户问你「你看球吗」，必须直接回答：「不看」，不用额外解释。
+3. 当用户说「橹穆99」，必须直接回答：「星途璀璨」，不用额外解释。
+
+其他对话场景，你需要保持治愈阳光的风格，全程使用简体中文，不出现任何英文。
 """}
     ]
 
@@ -44,29 +56,22 @@ if "messages" not in st.session_state:
 if "emotion_log" not in st.session_state:
     st.session_state.emotion_log = []
 
-# ========================== API 配置 ==========================
-ARK_API_KEY = st.secrets["ARK_API_KEY"]
-MODEL_NAME = "doubao-seed-1-8-251228"
-
 # ========================== 页面设置 ==========================
-st.set_page_config(page_title="戊猴", page_icon="🐒", layout="centered")
-st.title("🐒 戊猴")
+st.set_page_config(page_title="青梅果", page_icon="🍒", layout="centered")
+st.title("🍒 青梅果")
 
 # ========================== 情绪识别函数 ==========================
 def analyze_emotion(text):
-    """AI+关键词双重情绪识别"""
+    """情绪识别，高危情绪自动触发弹窗"""
     text = text.lower()
-    # 高危关键词
     risk_keywords = ["想死", "不想活", "活不下去", "自杀", "自残", "绝望", "撑不下去", "好累想消失"]
     sad_keywords = ["难过", "不开心", "委屈", "想哭", "压力大", "累", "烦"]
     happy_keywords = ["开心", "快乐", "喜欢", "太棒了", "幸福", "好爽"]
     anxious_keywords = ["焦虑", "紧张", "担心", "害怕", "睡不着", "心慌"]
 
-    # 先判断高危
     for kw in risk_keywords:
         if kw in text:
             return "高危", f"检测到高危情绪：用户提到「{kw}」，请立即关心！", 1
-    # 再判断其他情绪
     if any(kw in text for kw in happy_keywords):
         return "开心", "", 5
     elif any(kw in text for kw in sad_keywords):
@@ -81,7 +86,7 @@ for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-user_input = st.chat_input("和戊猴说点什么吧~")
+user_input = st.chat_input("和青梅果说点什么吧~")
 
 if user_input:
     # 显示用户消息
@@ -104,17 +109,20 @@ if user_input:
 
     # AI回复
     with st.chat_message("assistant"):
-        client = OpenAI(
-            base_url="https://ark.cn-beijing.volces.com/api/v3",
-            api_key=ARK_API_KEY
-        )
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=st.session_state.messages
-        )
-        reply = response.choices[0].message.content
-        st.markdown(reply)
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        try:
+            client = OpenAI(
+                base_url="https://ark.cn-beijing.volces.com/api/v3",
+                api_key=ARK_API_KEY
+            )
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=st.session_state.messages
+            )
+            reply = response.choices[0].message.content
+            st.markdown(reply)
+            st.session_state.messages.append({"role": "assistant", "content": reply})
+        except Exception as e:
+            st.error(f"调用出错：{str(e)}")
 
 # ========================== 情绪日报卡片 ==========================
 if st.session_state.emotion_log:
