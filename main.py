@@ -4,10 +4,11 @@ import streamlit.components.v1 as components
 from streamlit_mic_recorder import mic_recorder
 import json
 import base64
-from volcengine.ApiInfo import ApiInfo
-from volcengine.Credentials import Credentials
-from volcengine.ServiceInfo import ServiceInfo
-from volcengine.base.Service import Service
+import requests
+import hmac
+import hashlib
+import time
+import uuid
 
 # ========================== 1. 屏蔽登录弹窗 ==========================
 components.html("""
@@ -59,95 +60,95 @@ if "messages" not in st.session_state:
     components.html(load_script, height=0, width=0)
 # ======================================================================
 
-# ========================== 3. 火山引擎语音识别初始化 ==========================
-@st.cache_resource
-def init_volc_asr():
-    service_info = ServiceInfo(
-        "openspeech.bytedance.com",
-        {"Content-Type": "application/json"},
-        Credentials(
-            st.secrets["VOLC_ACCESS_KEY"],
-            st.secrets["VOLC_SECRET_KEY"],
-            "speech",
-            "cn-beijing"
-        ),
-        5,
-        5
-    )
-    api_info = {
-        "AsrRecognize": ApiInfo(
-            "POST",
-            "/api/v1/asr/recognize",
-            {},
-            {},
-            {}
-        )
-    }
-    service = Service(service_info, api_info)
-    return service
+# ========================== 3. 火山引擎签名工具（替代SDK） ==========================
+def sign(secret_key, sign_str):
+    return hmac.new(secret_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest()
 
+def get_auth_header(access_key, secret_key, service, region, host, path, method, body):
+    timestamp = int(time.time())
+    date = time.strftime("%Y%m%d", time.gmtime(timestamp))
+    
+    credential_scope = f"{date}/{region}/{service}/request"
+    signed_headers = "host;x-content-sha256;x-date"
+    
+    content_sha256 = hashlib.sha256(body.encode('utf-8')).hexdigest()
+    
+    canonical_request = f"{method}\n{path}\n\nhost:{host}\nx-content-sha256:{content_sha256}\nx-date:{timestamp}\n\n{signed_headers}\n{content_sha256}"
+    
+    string_to_sign = f"SDK-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+    
+    k_date = hmac.new(secret_key.encode('utf-8'), date.encode('utf-8'), hashlib.sha256).digest()
+    k_region = hmac.new(k_date, region.encode('utf-8'), hashlib.sha256).digest()
+    k_service = hmac.new(k_region, service.encode('utf-8'), hashlib.sha256).digest()
+    k_signing = hmac.new(k_service, b"request", hashlib.sha256).digest()
+    
+    signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+    
+    authorization = f"SDK-HMAC-SHA256 Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
+    
+    return {
+        "Authorization": authorization,
+        "X-Date": str(timestamp),
+        "X-Content-Sha256": content_sha256,
+        "Content-Type": "application/json"
+    }
+# ======================================================================
+
+# ========================== 4. 语音识别（HTTP版，无SDK） ==========================
 def audio_to_text(audio_bytes):
-    service = init_volc_asr()
-    body = {
+    access_key = st.secrets["VOLC_ACCESS_KEY"]
+    secret_key = st.secrets["VOLC_SECRET_KEY"]
+    
+    host = "openspeech.bytedance.com"
+    path = "/api/v1/asr/recognize"
+    url = f"https://{host}{path}"
+    
+    body = json.dumps({
         "appid": "volcengine",
         "format": "wav",
         "sample_rate": 16000,
         "language": "zh-CN",
         "audio": base64.b64encode(audio_bytes).decode('utf-8')
-    }
+    }, ensure_ascii=False)
+    
+    headers = get_auth_header(access_key, secret_key, "speech", "cn-beijing", host, path, "POST", body)
+    
     try:
-        resp = service.json("AsrRecognize", {}, body)
-        if resp.get("code") == 0:
-            return resp.get("result", {}).get("text", "").strip()
+        resp = requests.post(url, headers=headers, data=body.encode('utf-8'))
+        resp_json = resp.json()
+        if resp_json.get("code") == 0:
+            return resp_json.get("result", {}).get("text", "").strip()
         else:
-            return f"语音识别失败：{resp.get('message')}"
+            return f"语音识别失败：{resp_json.get('message')}"
     except Exception as e:
         return f"语音识别出错：{str(e)}"
 # ======================================================================
 
-# ========================== 4. 火山引擎语音合成初始化（新增！） ==========================
-@st.cache_resource
-def init_volc_tts():
-    service_info = ServiceInfo(
-        "openspeech.bytedance.com",
-        {"Content-Type": "application/json"},
-        Credentials(
-            st.secrets["VOLC_ACCESS_KEY"],
-            st.secrets["VOLC_SECRET_KEY"],
-            "speech",
-            "cn-beijing"
-        ),
-        5,
-        5
-    )
-    api_info = {
-        "TtsSynthesize": ApiInfo(
-            "POST",
-            "/api/v1/tts/synthesize",
-            {},
-            {},
-            {}
-        )
-    }
-    service = Service(service_info, api_info)
-    return service
-
+# ========================== 5. 语音合成（HTTP版，无SDK） ==========================
 def text_to_audio(text):
-    service = init_volc_tts()
-    body = {
+    access_key = st.secrets["VOLC_ACCESS_KEY"]
+    secret_key = st.secrets["VOLC_SECRET_KEY"]
+    
+    host = "openspeech.bytedance.com"
+    path = "/api/v1/tts/synthesize"
+    url = f"https://{host}{path}"
+    
+    body = json.dumps({
         "appid": "volcengine",
         "text": text,
-        "voice_type": "BV001_streaming",  # 温柔女声，适合戊猴人设
+        "voice_type": "BV001_streaming",
         "format": "mp3",
         "sample_rate": 16000,
         "speed": 1.0,
         "volume": 1.0
-    }
+    }, ensure_ascii=False)
+    
+    headers = get_auth_header(access_key, secret_key, "speech", "cn-beijing", host, path, "POST", body)
+    
     try:
-        resp = service.json("TtsSynthesize", {}, body)
-        if resp.get("code") == 0:
-            audio_base64 = resp.get("result", {}).get("audio", "")
-            return base64.b64decode(audio_base64)
+        resp = requests.post(url, headers=headers, data=body.encode('utf-8'))
+        if resp.status_code == 200:
+            return resp.content
         else:
             return None
     except Exception as e:
@@ -172,7 +173,7 @@ client = OpenAI(
     api_key=ARK_API_KEY
 )
 
-# ========================== 5. 全自动语音输入 ==========================
+# ========================== 6. 全自动语音输入 ==========================
 st.write("")
 col1, col2 = st.columns([1, 5])
 with col1:
@@ -201,7 +202,6 @@ if audio and "bytes" in audio:
 for msg in st.session_state.messages[1:]:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        # 如果是AI的回复，显示语音播放按钮
         if msg["role"] == "assistant" and "audio" in msg:
             st.audio(msg["audio"], format="audio/mp3")
 
@@ -223,14 +223,11 @@ if st.session_state.messages[-1]["role"] == "user":
             reply = response.choices[0].message.content
             st.markdown(reply)
             
-            # 自动生成语音回复
             with st.spinner("🔊 正在生成语音..."):
                 audio_bytes = text_to_audio(reply)
             
             if audio_bytes:
-                # 显示语音播放按钮，并自动播放
                 st.audio(audio_bytes, format="audio/mp3", autoplay=True)
-                # 把语音和文字一起保存到聊天记录
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": reply,
@@ -239,7 +236,6 @@ if st.session_state.messages[-1]["role"] == "user":
             else:
                 st.session_state.messages.append({"role": "assistant", "content": reply})
             
-            # 保存聊天记录
             save_chat_history(st.session_state.messages)
             
         except Exception as e:
