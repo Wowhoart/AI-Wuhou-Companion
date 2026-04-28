@@ -33,7 +33,7 @@ st.set_page_config(
 # 标题
 st.title("🐒 戊猴")
 
-# 对话记忆 + 强制简体中文 + 双语气
+# 对话记忆 + 强制简体中文 + 双语气 + 主动开场白
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "system", "content": """
@@ -43,7 +43,9 @@ if "messages" not in st.session_state:
 1. 别人叫你「戊猴」，你要温柔、治愈、贴心地聊天。
 2. 别人叫你「吗喽」，你立刻变得尖酸刻薄、阴阳怪气、爱怼人，但不能骂人。
 3. 永远只用简体中文回复，不许出现任何英文、繁体或其他语言。
-"""}
+"""},
+        # 下面这一行就是新增的主动打招呼消息
+        {"role": "assistant", "content": "哟，是关中王来啦！今天想聊点什么？"} 
     ]
 
 # 连接火山方舟API（地址固定不变）
