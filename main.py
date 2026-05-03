@@ -48,7 +48,7 @@ if "messages" not in st.session_state:
     ]
 # ======================================================================
 
-# ========================== 火山引擎签名工具 ==========================
+# ========================== 修正后的火山引擎签名工具 ==========================
 def sign(secret_key, sign_str):
     return hmac.new(secret_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -72,17 +72,15 @@ def get_auth_header(access_key, secret_key, service, region, host, path, method,
     
     signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
     
-    authorization = f"SDK-HMAC-SHA256 Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
-    
     return {
-        "Authorization": authorization,
+        "Authorization": f"SDK-HMAC-SHA256 Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
         "X-Date": str(timestamp),
         "X-Content-Sha256": content_sha256,
         "Content-Type": "application/json"
     }
 # ======================================================================
 
-# ========================== 语音识别（HTTP版） ==========================
+# ========================== 修正后的语音识别 ==========================
 def audio_to_text(audio_bytes):
     access_key = st.secrets["VOLC_ACCESS_KEY"]
     secret_key = st.secrets["VOLC_SECRET_KEY"]
@@ -91,10 +89,11 @@ def audio_to_text(audio_bytes):
     path = "/api/v1/asr/recognize"
     url = f"https://{host}{path}"
     
+    # 修正：使用mic_recorder默认的44100Hz采样率
     body = json.dumps({
         "appid": "volcengine",
         "format": "wav",
-        "sample_rate": 16000,
+        "sample_rate": 44100,
         "language": "zh-CN",
         "audio": base64.b64encode(audio_bytes).decode('utf-8')
     }, ensure_ascii=False)
@@ -103,11 +102,16 @@ def audio_to_text(audio_bytes):
     
     try:
         resp = requests.post(url, headers=headers, data=body.encode('utf-8'))
-        resp_json = resp.json()
+        # 添加调试信息：如果返回不是JSON，打印原始内容
+        try:
+            resp_json = resp.json()
+        except:
+            return f"语音识别失败：API返回非JSON格式，内容：{resp.text[:200]}"
+            
         if resp_json.get("code") == 0:
             return resp_json.get("result", {}).get("text", "").strip()
         else:
-            return f"语音识别失败：{resp_json.get('message')}"
+            return f"语音识别失败：{resp_json.get('message')} (错误码：{resp_json.get('code')})"
     except Exception as e:
         return f"语音识别出错：{str(e)}"
 # ======================================================================
@@ -130,11 +134,10 @@ client = OpenAI(
     api_key=ARK_API_KEY
 )
 
-# ========================== 修正后的语音输入（兼容0.0.8版本） ==========================
+# ========================== 语音输入 ==========================
 st.write("")
 col1, col2 = st.columns([1, 5])
 with col1:
-    # 去掉了不兼容的sample_rate和format参数
     audio = mic_recorder(
         start_prompt="🎤 按住说话",
         stop_prompt="⏹️ 松开发送",
