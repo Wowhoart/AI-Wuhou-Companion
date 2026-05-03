@@ -51,9 +51,22 @@ client = OpenAI(
     api_key=ARK_API_KEY
 )
 
-# ========================== 3. 点击开始/结束语音录制（核心！） ==========================
+# ========================== 3. 双端兼容语音输入（核心修复） ==========================
+# 使用隐藏表单实现JavaScript到Python的可靠通信
+with st.form("voice_form", clear_on_submit=True):
+    voice_input = st.text_input("", key="voice_input", label_visibility="collapsed")
+    submit_btn = st.form_submit_button("提交", type="primary", label_visibility="collapsed")
+
+if submit_btn and voice_input:
+    st.session_state.messages.append({"role": "user", "content": voice_input})
+    st.rerun()
+
+# 语音按钮和识别逻辑（双端兼容）
 components.html("""
 <style>
+.voice-container {
+  margin-bottom: 20px;
+}
 .voice-btn {
   background-color: #ff4b4b;
   color: white;
@@ -62,8 +75,8 @@ components.html("""
   border-radius: 8px;
   font-size: 16px;
   cursor: pointer;
-  margin-bottom: 20px;
   transition: all 0.3s ease;
+  touch-action: manipulation; /* 优化移动端点击 */
 }
 .voice-btn.recording {
   background-color: #28a745;
@@ -81,29 +94,35 @@ components.html("""
 }
 </style>
 
-<div style="display: flex; align-items: center; margin-bottom: 20px;">
+<div class="voice-container">
   <button id="voiceBtn" class="voice-btn">🎤 点击开始说话</button>
   <span id="statusText" class="status-text"></span>
 </div>
 
 <script>
+// 兼容不同浏览器的语音API前缀
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition;
 let isRecording = false;
+let finalTranscript = '';
 
 // 初始化语音识别
-if ('webkitSpeechRecognition' in window) {
-  recognition = new webkitSpeechRecognition();
+if (SpeechRecognition) {
+  recognition = new SpeechRecognition();
   recognition.continuous = true;
-  recognition.interimResults = false;
+  recognition.interimResults = true;
   recognition.lang = 'zh-CN';
 
   recognition.onresult = function(event) {
-    let text = '';
+    let interimTranscript = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      text += event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript;
+      } else {
+        interimTranscript += event.results[i][0].transcript;
+      }
     }
-    // 把识别结果发送给Streamlit
-    window.parent.postMessage({type: 'streamlit', data: {voice_text: text.trim()}}, '*');
+    document.getElementById('statusText').textContent = finalTranscript + interimTranscript;
   };
 
   recognition.onerror = function(event) {
@@ -135,32 +154,57 @@ function updateButtonState() {
   } else {
     btn.classList.remove('recording');
     btn.textContent = '🎤 点击开始说话';
-    status.textContent = '';
   }
 }
 
-// 按钮点击事件
-document.getElementById('voiceBtn').addEventListener('click', function() {
+// 按钮点击事件（同时支持鼠标和触摸）
+function handleVoiceClick() {
   if (!recognition) return;
   
   isRecording = !isRecording;
   updateButtonState();
   
   if (isRecording) {
-    recognition.start();
+    finalTranscript = '';
+    // 请求麦克风权限
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(function() {
+        recognition.start();
+      })
+      .catch(function(err) {
+        document.getElementById('statusText').textContent = '请允许麦克风权限';
+        isRecording = false;
+        updateButtonState();
+      });
   } else {
     recognition.stop();
+    
+    // 延迟一点时间，确保最后一段语音被识别
+    setTimeout(function() {
+      if (finalTranscript.trim()) {
+        // 把识别结果写入隐藏输入框并提交
+        const input = document.querySelector('input[aria-label="voice_input"]');
+        input.value = finalTranscript.trim();
+        
+        // 触发提交按钮点击
+        const submitBtn = input.closest('form').querySelector('button[type="submit"]');
+        submitBtn.click();
+      } else {
+        document.getElementById('statusText').textContent = '没有识别到声音';
+      }
+    }, 500);
   }
+}
+
+// 同时绑定点击和触摸事件，优化移动端
+const voiceBtn = document.getElementById('voiceBtn');
+voiceBtn.addEventListener('click', handleVoiceClick);
+voiceBtn.addEventListener('touchstart', function(e) {
+  e.preventDefault(); // 防止移动端双击缩放
+  handleVoiceClick();
 });
 </script>
 """, height=120)
-
-# 处理语音识别结果
-if "voice_text" in st.session_state and st.session_state.voice_text:
-    text = st.session_state.voice_text
-    st.session_state.voice_text = ""
-    st.session_state.messages.append({"role": "user", "content": text})
-    st.rerun()
 
 # ========================== 4. 显示聊天记录和文字输入 ==========================
 for msg in st.session_state.messages[1:]:
