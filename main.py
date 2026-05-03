@@ -1,13 +1,9 @@
 import streamlit as st
 from openai import OpenAI
 import streamlit.components.v1 as components
-from streamlit_mic_recorder import mic_recorder
 import json
-import whisper
-import tempfile
-import os
 
-# ========================== 屏蔽登录弹窗 ==========================
+# ========================== 1. 屏蔽登录弹窗 ==========================
 components.html("""
 <script>
 window.addEventListener('load', function() {
@@ -23,7 +19,7 @@ window.addEventListener('load', function() {
 """, height=0, width=0)
 # ======================================================================
 
-# ========================== 永久保存聊天记录 ==========================
+# ========================== 2. 永久保存聊天记录 ==========================
 def save_chat_history(messages):
     save_messages = [msg for msg in messages if msg["role"] != "system"]
     history_json = json.dumps(save_messages, ensure_ascii=False)
@@ -46,30 +42,89 @@ if "messages" not in st.session_state:
     ]
 # ======================================================================
 
-# ========================== 加载Whisper语音识别模型（本地运行） ==========================
-@st.cache_resource
-def load_whisper_model():
-    # 使用tiny模型，速度最快，准确率足够日常聊天
-    return whisper.load_model("tiny")
+# ========================== 3. 浏览器原生语音识别（核心！零依赖） ==========================
+components.html("""
+<script>
+let recognition;
+let isListening = false;
 
-model = load_whisper_model()
+// 初始化语音识别
+if ('webkitSpeechRecognition' in window) {
+  recognition = new webkitSpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = 'zh-CN';
 
-def audio_to_text(audio_bytes):
-    try:
-        # 创建临时文件保存音频
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-            temp_file.write(audio_bytes)
-            temp_file_path = temp_file.name
-        
-        # 使用Whisper本地转文字
-        result = model.transcribe(temp_file_path, language="zh")
-        
-        # 删除临时文件
-        os.unlink(temp_file_path)
-        
-        return result["text"].strip()
-    except Exception as e:
-        return f"语音识别出错：{str(e)}"
+  recognition.onresult = function(event) {
+    const text = event.results[0][0].transcript;
+    // 把识别结果发送给Streamlit
+    window.parent.postMessage({type: 'voice_input', data: text}, '*');
+  };
+
+  recognition.onerror = function(event) {
+    window.parent.postMessage({type: 'voice_error', data: event.error}, '*');
+  };
+}
+
+// 监听Streamlit发来的消息
+window.addEventListener('message', function(event) {
+  if (event.data.type === 'start_listening') {
+    if (recognition && !isListening) {
+      recognition.start();
+      isListening = true;
+    }
+  } else if (event.data.type === 'stop_listening') {
+    if (recognition && isListening) {
+      recognition.stop();
+      isListening = false;
+    }
+  }
+});
+</script>
+""", height=0, width=0)
+
+# 语音输入按钮和状态
+if "voice_text" not in st.session_state:
+    st.session_state.voice_text = ""
+
+if "is_listening" not in st.session_state:
+    st.session_state.is_listening = False
+
+st.write("")
+col1, col2 = st.columns([1, 5])
+with col1:
+    if st.button("🎤 按住说话", use_container_width=True, type="primary"):
+        st.session_state.is_listening = True
+        components.html("""
+        <script>
+        window.parent.postMessage({type: 'start_listening'}, '*');
+        </script>
+        """, height=0, width=0)
+        st.rerun()
+
+# 处理语音识别结果
+if st.session_state.is_listening:
+    st.info("正在听你说话...")
+    # 等待语音识别结果
+    components.html("""
+    <script>
+    window.addEventListener('message', function(event) {
+      if (event.data.type === 'voice_input') {
+        window.parent.postMessage({type: 'streamlit', data: {voice_text: event.data.data}}, '*');
+      } else if (event.data.type === 'voice_error') {
+        window.parent.postMessage({type: 'streamlit', data: {voice_error: event.data.data}}, '*');
+      }
+    });
+    </script>
+    """, height=0, width=0)
+    
+    # 检查是否有结果
+    if st.session_state.voice_text:
+        text = st.session_state.voice_text
+        st.session_state.voice_text = ""
+        st.session_state.is_listening = False
+        st.session_state.messages.append({"role": "user", "content": text})
+        st.rerun()
 # ======================================================================
 
 # ====================== 基础配置 ======================
@@ -89,29 +144,6 @@ client = OpenAI(
     base_url="https://ark.cn-beijing.volces.com/api/v3",
     api_key=ARK_API_KEY
 )
-
-# ========================== 全自动语音输入 ==========================
-st.write("")
-col1, col2 = st.columns([1, 5])
-with col1:
-    audio = mic_recorder(
-        start_prompt="🎤 按住说话",
-        stop_prompt="⏹️ 松开发送",
-        just_once=True,
-        use_container_width=True,
-        key="mic_recorder"
-    )
-
-if audio and "bytes" in audio:
-    with st.spinner("🎤 正在转文字..."):
-        text = audio_to_text(audio["bytes"])
-    
-    if text and not text.startswith("语音识别"):
-        st.session_state.messages.append({"role": "user", "content": text})
-        st.rerun()
-    else:
-        st.error(text)
-# ======================================================================
 
 # 显示聊天记录
 for msg in st.session_state.messages[1:]:
