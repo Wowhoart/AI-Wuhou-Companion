@@ -1,43 +1,5 @@
 import streamlit as st
 from openai import OpenAI
-import streamlit.components.v1 as components
-import json
-
-# 屏蔽登录弹窗
-components.html("""
-<script>
-window.addEventListener('load', function() {
-  setTimeout(() => {
-    const loginOverlay = document.querySelector('.st-eb');
-    const loginModal = document.querySelector('.st-ci');
-    if (loginOverlay) loginOverlay.remove();
-    if (loginModal) loginModal.remove();
-    document.body.style.overflow = 'auto';
-  }, 100);
-});
-</script>
-""", height=0, width=0)
-
-# 永久保存聊天记录
-def save_chat_history(messages):
-    save_messages = [msg for msg in messages if msg["role"] != "system"]
-    history_json = json.dumps(save_messages, ensure_ascii=False)
-    components.html(f"""
-    <script>
-    localStorage.setItem('wuhou_chat_history', '{history_json}');
-    </script>
-    """, height=0, width=0)
-
-# 初始化对话
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": """
-你的名字叫戊猴，全程必须只用简体中文说话。
-1. 别人叫你「戊猴」，你要温柔、治愈、贴心地聊天。
-2. 别人叫你「吗喽」，你立刻变得尖酸刻薄、阴阳怪气、爱怼人，但不能骂人。
-3. 永远只用简体中文回复，不许出现任何英文、繁体或其他语言。
-"""}
-    ]
 
 # 基础配置
 ARK_API_KEY = st.secrets["ARK_API_KEY"]
@@ -51,6 +13,17 @@ client = OpenAI(
     base_url="https://ark.cn-beijing.volces.com/api/v3",
     api_key=ARK_API_KEY
 )
+
+# 初始化对话
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": """
+你的名字叫戊猴，全程必须只用简体中文说话。
+1. 别人叫你「戊猴」，你要温柔、治愈、贴心地聊天。
+2. 别人叫你「吗喽」，你立刻变得尖酸刻薄、阴阳怪气、爱怼人，但不能骂人。
+3. 永远只用简体中文回复，不许出现任何英文、繁体或其他语言。
+"""}
+    ]
 
 # 显示聊天记录
 for msg in st.session_state.messages[1:]:
@@ -72,7 +45,6 @@ if user_input:
             reply = response.choices[0].message.content
             st.markdown(reply)
             st.session_state.messages.append({"role": "assistant", "content": reply})
-            save_chat_history(st.session_state.messages)
             
         except Exception as e:
             st.error(f"调用出错：{str(e)}")
