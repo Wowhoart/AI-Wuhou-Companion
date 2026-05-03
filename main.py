@@ -3,11 +3,9 @@ from openai import OpenAI
 import streamlit.components.v1 as components
 from streamlit_mic_recorder import mic_recorder
 import json
-import base64
-import requests
-import hmac
-import hashlib
-import time
+import whisper
+import tempfile
+import os
 
 # ========================== 屏蔽登录弹窗 ==========================
 components.html("""
@@ -48,70 +46,28 @@ if "messages" not in st.session_state:
     ]
 # ======================================================================
 
-# ========================== 修正后的火山引擎签名工具 ==========================
-def sign(secret_key, sign_str):
-    return hmac.new(secret_key.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest()
+# ========================== 加载Whisper语音识别模型（本地运行） ==========================
+@st.cache_resource
+def load_whisper_model():
+    # 使用tiny模型，速度最快，准确率足够日常聊天
+    return whisper.load_model("tiny")
 
-def get_auth_header(access_key, secret_key, service, region, host, path, method, body):
-    timestamp = int(time.time())
-    date = time.strftime("%Y%m%d", time.gmtime(timestamp))
-    
-    credential_scope = f"{date}/{region}/{service}/request"
-    signed_headers = "host;x-content-sha256;x-date"
-    
-    content_sha256 = hashlib.sha256(body.encode('utf-8')).hexdigest()
-    
-    canonical_request = f"{method}\n{path}\n\nhost:{host}\nx-content-sha256:{content_sha256}\nx-date:{timestamp}\n\n{signed_headers}\n{content_sha256}"
-    
-    string_to_sign = f"SDK-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
-    
-    k_date = hmac.new(secret_key.encode('utf-8'), date.encode('utf-8'), hashlib.sha256).digest()
-    k_region = hmac.new(k_date, region.encode('utf-8'), hashlib.sha256).digest()
-    k_service = hmac.new(k_region, service.encode('utf-8'), hashlib.sha256).digest()
-    k_signing = hmac.new(k_service, b"request", hashlib.sha256).digest()
-    
-    signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-    
-    return {
-        "Authorization": f"SDK-HMAC-SHA256 Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
-        "X-Date": str(timestamp),
-        "X-Content-Sha256": content_sha256,
-        "Content-Type": "application/json"
-    }
-# ======================================================================
+model = load_whisper_model()
 
-# ========================== 修正后的语音识别 ==========================
 def audio_to_text(audio_bytes):
-    access_key = st.secrets["VOLC_ACCESS_KEY"]
-    secret_key = st.secrets["VOLC_SECRET_KEY"]
-    
-    host = "openspeech.bytedance.com"
-    path = "/api/v1/asr/recognize"
-    url = f"https://{host}{path}"
-    
-    # 修正：使用mic_recorder默认的44100Hz采样率
-    body = json.dumps({
-        "appid": "volcengine",
-        "format": "wav",
-        "sample_rate": 44100,
-        "language": "zh-CN",
-        "audio": base64.b64encode(audio_bytes).decode('utf-8')
-    }, ensure_ascii=False)
-    
-    headers = get_auth_header(access_key, secret_key, "speech", "cn-beijing", host, path, "POST", body)
-    
     try:
-        resp = requests.post(url, headers=headers, data=body.encode('utf-8'))
-        # 添加调试信息：如果返回不是JSON，打印原始内容
-        try:
-            resp_json = resp.json()
-        except:
-            return f"语音识别失败：API返回非JSON格式，内容：{resp.text[:200]}"
-            
-        if resp_json.get("code") == 0:
-            return resp_json.get("result", {}).get("text", "").strip()
-        else:
-            return f"语音识别失败：{resp_json.get('message')} (错误码：{resp_json.get('code')})"
+        # 创建临时文件保存音频
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            temp_file.write(audio_bytes)
+            temp_file_path = temp_file.name
+        
+        # 使用Whisper本地转文字
+        result = model.transcribe(temp_file_path, language="zh")
+        
+        # 删除临时文件
+        os.unlink(temp_file_path)
+        
+        return result["text"].strip()
     except Exception as e:
         return f"语音识别出错：{str(e)}"
 # ======================================================================
@@ -134,7 +90,7 @@ client = OpenAI(
     api_key=ARK_API_KEY
 )
 
-# ========================== 语音输入 ==========================
+# ========================== 全自动语音输入 ==========================
 st.write("")
 col1, col2 = st.columns([1, 5])
 with col1:
