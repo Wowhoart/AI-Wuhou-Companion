@@ -130,18 +130,17 @@ client = OpenAI(
     api_key=ARK_API_KEY
 )
 
-# ========================== 全自动语音输入 ==========================
+# ========================== 修正后的语音输入（兼容0.0.8版本） ==========================
 st.write("")
 col1, col2 = st.columns([1, 5])
 with col1:
+    # 去掉了不兼容的sample_rate和format参数
     audio = mic_recorder(
         start_prompt="🎤 按住说话",
         stop_prompt="⏹️ 松开发送",
         just_once=True,
         use_container_width=True,
-        key="mic_recorder",
-        format="wav",
-        sample_rate=16000
+        key="mic_recorder"
     )
 
 if audio and "bytes" in audio:
